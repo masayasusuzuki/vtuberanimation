@@ -394,13 +394,86 @@ def main():
     # ファイルアップロードセクション
     st.header("📁 ファイルアップロード")
     
+    # 処理モードの選択
+    processing_mode = st.radio(
+        "処理モードを選択してください",
+        ["シングルモード（1つずつ処理）", "バッチモード（複数を自動処理）"],
+        help="バッチモードでは複数の音声ファイルを一度にアップロードして自動処理できます"
+    )
+    
     # 音声ファイルのアップロード
     st.subheader("1. 音声ファイル (.wav/.mp3)")
-    audio_file = st.file_uploader(
-        "音声ファイルを選択してください",
-        type=['wav', 'mp3'],
-        help="WAV または MP3 形式の音声ファイルをアップロードしてください"
-    )
+    if processing_mode == "シングルモード（1つずつ処理）":
+        audio_files = st.file_uploader(
+            "音声ファイルを選択してください",
+            type=['wav', 'mp3'],
+            help="WAV または MP3 形式の音声ファイルをアップロードしてください"
+        )
+        # シングルモード用に配列に変換
+        audio_files = [audio_files] if audio_files else []
+    else:
+        audio_files = st.file_uploader(
+            "音声ファイルを選択してください（複数選択可能）",
+            type=['wav', 'mp3'],
+            accept_multiple_files=True,
+            help="WAV または MP3 形式の音声ファイルを複数選択できます"
+        )
+        if audio_files:
+            st.info(f"📁 {len(audio_files)}個のファイルが選択されています")
+            
+            # ファイル順序の設定
+            st.subheader("📋 ファイル処理順序")
+            sort_option = st.radio(
+                "処理順序を選択してください",
+                ["ファイル名順（A-Z）", "ファイル名順（Z-A）", "追加順を維持", "手動並び替え"],
+                index=0,  # デフォルトはファイル名順
+                help="ファイルの処理順序を選択できます"
+            )
+            
+            # ファイル順序の表示と並び替え
+            if sort_option == "ファイル名順（A-Z）":
+                audio_files = sorted(audio_files, key=lambda x: x.name)
+            elif sort_option == "ファイル名順（Z-A）":
+                audio_files = sorted(audio_files, key=lambda x: x.name, reverse=True)
+            elif sort_option == "手動並び替え":
+                st.info("💡 下記の順序で処理されます。順序を変更したい場合は、ファイルを再選択してください。")
+                
+                # ファイル順序の手動調整UIを作成
+                reordered_files = []
+                col1, col2 = st.columns([3, 1])
+                
+                with col1:
+                    st.write("**現在の順序:**")
+                    for idx, file in enumerate(audio_files):
+                        st.write(f"{idx + 1}. {file.name}")
+                
+                with col2:
+                    st.write("**並び替えボタン:**")
+                    if len(audio_files) > 1:
+                        for idx in range(len(audio_files)):
+                            col_up, col_down = st.columns(2)
+                            with col_up:
+                                if st.button("⬆️", key=f"up_{idx}", disabled=idx==0):
+                                    # ファイルを上に移動
+                                    audio_files[idx], audio_files[idx-1] = audio_files[idx-1], audio_files[idx]
+                                    st.rerun()
+                            with col_down:
+                                if st.button("⬇️", key=f"down_{idx}", disabled=idx==len(audio_files)-1):
+                                    # ファイルを下に移動
+                                    audio_files[idx], audio_files[idx+1] = audio_files[idx+1], audio_files[idx]
+                                    st.rerun()
+            # "追加順を維持"の場合はそのまま
+            
+            # 処理順序のプレビュー表示
+            st.write("**📋 最終処理順序:**")
+            for idx, file in enumerate(audio_files):
+                file_size = file.size / (1024 * 1024) if hasattr(file, 'size') else 0
+                st.write(f"🎵 **{idx + 1}.** {file.name} {f'({file_size:.1f}MB)' if file_size > 0 else ''}")
+            
+            # 処理時間の推定
+            estimated_time = len(audio_files) * 30  # ファイル1つあたり約30秒と仮定
+            st.info(f"⏰ **推定処理時間**: 約{estimated_time//60}分{estimated_time%60}秒（{len(audio_files)}ファイル × 約30秒）")
+            st.divider()
     
     # 口閉じ画像のアップロード
     st.subheader("2. 口閉じ画像")
@@ -432,25 +505,36 @@ def main():
     # デバッグモードの選択
     debug_mode = st.checkbox("🔍 デバッグモード（詳細な情報を表示）", value=False)
     
-    if st.button("動画を生成する", type="primary", disabled=not (audio_file and mouth_closed and mouth_open)):
-        if audio_file and mouth_closed and mouth_open:
+    # ボタンのラベルを処理モードに応じて変更
+    button_label = "動画を生成する" if processing_mode == "シングルモード（1つずつ処理）" else f"バッチ処理を開始する（{len(audio_files)}個のファイル）"
+    button_disabled = not (audio_files and len([f for f in audio_files if f is not None]) > 0 and mouth_closed and mouth_open)
+    
+    if st.button(button_label, type="primary", disabled=button_disabled):
+        if audio_files and mouth_closed and mouth_open and len([f for f in audio_files if f is not None]) > 0:
+            # バッチ処理かシングル処理かを判定
+            valid_audio_files = [f for f in audio_files if f is not None]
+            is_batch_mode = len(valid_audio_files) > 1
+            
             # プログレスバーを表示
             progress_bar = st.progress(0)
             status_text = st.empty()
             
+            # バッチ処理用のセッション状態初期化
+            if 'batch_videos' not in st.session_state:
+                st.session_state.batch_videos = []
+            if 'batch_video_names' not in st.session_state:
+                st.session_state.batch_video_names = []
+            
+            # バッチ処理開始時にクリア
+            if is_batch_mode:
+                st.session_state.batch_videos = []
+                st.session_state.batch_video_names = []
+            
             try:
-                status_text.text("動画を生成中...")
-                progress_bar.progress(25)
+                if is_batch_mode:
+                    st.subheader(f"🚀 バッチ処理開始（{len(valid_audio_files)}個のファイル）")
                 
-                if debug_mode:
-                    st.write("🔍 [DEBUG] 一時ファイル作成開始...")
-                
-                # 一時ファイルを作成
-                file_extension = '.wav' if audio_file.name.endswith('.wav') else '.mp3'
-                with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_audio:
-                    tmp_audio.write(audio_file.read())
-                    tmp_audio_path = tmp_audio.name
-                
+                # 口画像の一時ファイルを作成（全処理で共通使用）
                 with tempfile.NamedTemporaryFile(delete=False, suffix='.png') as tmp_closed:
                     tmp_closed.write(mouth_closed.read())
                     tmp_closed_path = tmp_closed.name
@@ -459,104 +543,224 @@ def main():
                     tmp_open.write(mouth_open.read())
                     tmp_open_path = tmp_open.name
                 
-                if debug_mode:
-                    st.write(f"🔍 [DEBUG] 一時ファイル作成完了:")
-                    st.write(f"  - 音声: {tmp_audio_path}")
-                    st.write(f"  - 口閉じ: {tmp_closed_path}")
-                    st.write(f"  - 口開き: {tmp_open_path}")
+                successful_videos = 0
+                failed_videos = 0
                 
-                progress_bar.progress(50)
-                status_text.text("音声を解析中...")
-                
-                # 出力ファイルパス
-                output_path = tempfile.mktemp(suffix='.mp4')
-                
-                progress_bar.progress(75)
-                status_text.text("動画を作成中...")
-                
-                # 動画生成
-                success = create_mouth_animation_video(
-                    tmp_audio_path, tmp_closed_path, tmp_open_path, output_path, debug_mode, max_image_size, voice_threshold
-                )
-                
-                if success:
-                    progress_bar.progress(100)
-                    status_text.text("動画生成完了！")
+                # 各音声ファイルを処理
+                for file_idx, audio_file in enumerate(valid_audio_files):
+                    if debug_mode:
+                        st.write(f"🔍 [DEBUG] ファイル {file_idx + 1}/{len(valid_audio_files)}: {audio_file.name}")
                     
-                    # 生成された動画をセッション状態に保存
-                    with open(output_path, 'rb') as f:
-                        st.session_state.generated_video = f.read()
+                    # 全体の進行状況を更新
+                    overall_progress = (file_idx / len(valid_audio_files)) * 100
+                    progress_bar.progress(int(overall_progress))
+                    status_text.text(f"処理中... ({file_idx + 1}/{len(valid_audio_files)}) {audio_file.name}")
                     
-                    # 動画情報を保存（プレビュー用）
-                    st.session_state.video_path = output_path
+                    # 現在のファイル用コンテナ
+                    if is_batch_mode:
+                        with st.expander(f"📹 {file_idx + 1}. {audio_file.name}", expanded=False):
+                            file_status = st.empty()
+                            file_progress = st.progress(0)
+                    else:
+                        file_status = status_text
+                        file_progress = progress_bar
                     
-                    st.success("✅ 動画が正常に生成されました！")
-                    
-                    # プレビュー表示
-                    st.subheader("🎬 プレビュー")
                     try:
-                        # 動画ファイルを直接表示
-                        video_file = open(output_path, 'rb')
-                        video_bytes = video_file.read()
-                        st.video(video_bytes)
-                        video_file.close()
+                        file_status.text(f"音声ファイル処理中: {audio_file.name}")
+                        file_progress.progress(25)
                         
-                        # 動画情報を表示
-                        file_size = len(st.session_state.generated_video) / (1024 * 1024)  # MB
-                        st.info(f"📊 **動画情報**: ファイルサイズ {file_size:.1f}MB")
+                        # 音声ファイルの一時ファイルを作成
+                        file_extension = '.wav' if audio_file.name.endswith('.wav') else '.mp3'
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_audio:
+                            tmp_audio.write(audio_file.read())
+                            tmp_audio_path = tmp_audio.name
                         
-                    except Exception as preview_error:
-                        st.warning(f"⚠️ プレビュー表示エラー: {preview_error}")
-                        st.info("💡 動画は正常に生成されました。ダウンロードしてご確認ください。")
-                    
-                    # 一時ファイルをクリーンアップ（出力動画以外）
-                    for temp_file in [tmp_audio_path, tmp_closed_path, tmp_open_path]:
+                        if debug_mode:
+                            st.write(f"🔍 [DEBUG] 一時ファイル作成: {tmp_audio_path}")
+                        
+                        file_progress.progress(50)
+                        file_status.text(f"音声解析中: {audio_file.name}")
+                        
+                        # 出力ファイルパス（ファイル名に基づいて生成）
+                        base_name = os.path.splitext(audio_file.name)[0]
+                        output_path = tempfile.mktemp(suffix=f'_{base_name}.mp4')
+                        
+                        file_progress.progress(75)
+                        file_status.text(f"動画作成中: {audio_file.name}")
+                        
+                        # 動画生成
+                        success = create_mouth_animation_video(
+                            tmp_audio_path, tmp_closed_path, tmp_open_path, output_path, debug_mode, max_image_size, voice_threshold
+                        )
+                        
+                        if success:
+                            file_progress.progress(100)
+                            file_status.text(f"✅ 完了: {audio_file.name}")
+                            
+                            # 生成された動画を読み込み
+                            with open(output_path, 'rb') as f:
+                                video_data = f.read()
+                            
+                            if is_batch_mode:
+                                # バッチモードでは配列に追加
+                                st.session_state.batch_videos.append(video_data)
+                                st.session_state.batch_video_names.append(f"{base_name}.mp4")
+                                
+                                # ファイルサイズ表示
+                                file_size = len(video_data) / (1024 * 1024)
+                                st.success(f"✅ 生成完了: {base_name}.mp4 ({file_size:.1f}MB)")
+                            else:
+                                # シングルモードでは従来通り
+                                st.session_state.generated_video = video_data
+                                st.session_state.video_path = output_path
+                            
+                            successful_videos += 1
+                            
+                        else:
+                            file_progress.progress(0)
+                            file_status.text(f"❌ 失敗: {audio_file.name}")
+                            if is_batch_mode:
+                                st.error(f"❌ {audio_file.name} の処理に失敗しました")
+                            failed_videos += 1
+                        
+                        # 音声ファイルの一時ファイルをクリーンアップ
                         try:
-                            os.unlink(temp_file)
+                            os.unlink(tmp_audio_path)
                         except:
                             pass
-                    # 出力動画は後でクリーンアップ（プレビュー表示のため保持）
-                else:
-                    progress_bar.empty()
-                    status_text.empty()
-                    st.error("❌ 動画生成に失敗しました。")
+                        
+                    except Exception as file_error:
+                        file_progress.progress(0)
+                        file_status.text(f"❌ エラー: {audio_file.name}")
+                        if is_batch_mode:
+                            st.error(f"❌ {audio_file.name} でエラー: {file_error}")
+                        failed_videos += 1
+                
+                # 全体の処理完了
+                progress_bar.progress(100)
+                
+                if is_batch_mode:
+                    status_text.text("🎉 バッチ処理完了！")
+                    st.success(f"🎉 バッチ処理完了！ 成功: {successful_videos}個, 失敗: {failed_videos}個")
                     
+                    if successful_videos > 0:
+                        st.info(f"📹 {successful_videos}個の動画が生成されました。下記のダウンロードセクションから個別にダウンロードできます。")
+                else:
+                    # シングルモードの場合のプレビュー表示
+                    if successful_videos > 0:
+                        status_text.text("動画生成完了！")
+                        st.success("✅ 動画が正常に生成されました！")
+                        
+                        # プレビュー表示
+                        st.subheader("🎬 プレビュー")
+                        try:
+                            video_file = open(st.session_state.video_path, 'rb')
+                            video_bytes = video_file.read()
+                            st.video(video_bytes)
+                            video_file.close()
+                            
+                            # 動画情報を表示
+                            if st.session_state.generated_video:
+                                file_size = len(st.session_state.generated_video) / (1024 * 1024)
+                                st.info(f"📊 **動画情報**: ファイルサイズ {file_size:.1f}MB")
+                            
+                        except Exception as preview_error:
+                            st.warning(f"⚠️ プレビュー表示エラー: {preview_error}")
+                            st.info("💡 動画は正常に生成されました。ダウンロードしてご確認ください。")
+                
+                # 口画像の一時ファイルをクリーンアップ
+                for temp_file in [tmp_closed_path, tmp_open_path]:
+                    try:
+                        os.unlink(temp_file)
+                    except:
+                        pass
+                        
             except Exception as e:
                 progress_bar.empty()
                 status_text.empty()
-                st.error(f"❌ エラーが発生しました: {e}")
+                st.error(f"❌ 処理中にエラーが発生しました: {e}")
+                if debug_mode:
+                    import traceback
+                    st.error(f"🔍 [DEBUG] トレースバック:\n{traceback.format_exc()}")
         else:
             st.warning("⚠️ すべてのファイルをアップロードしてください。")
     
-    # ダウンロードボタン
-    if st.session_state.generated_video:
+    # ダウンロードセクション
+    has_single_video = 'generated_video' in st.session_state and st.session_state.generated_video is not None
+    has_batch_videos = 'batch_videos' in st.session_state and len(st.session_state.batch_videos) > 0
+    
+    if has_single_video or has_batch_videos:
         st.header("📥 ダウンロード")
         
-        col1, col2 = st.columns([1, 1])
+        # シングルモードのダウンロード
+        if has_single_video:
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                st.download_button(
+                    label="🎬 動画をダウンロード (.mp4)",
+                    data=st.session_state.generated_video,
+                    file_name="vtuber_animation.mp4",
+                    mime="video/mp4",
+                    use_container_width=True
+                )
+            
+            with col2:
+                if st.button("🗑️ プレビューをクリア", use_container_width=True):
+                    # 一時ファイルも削除
+                    if 'video_path' in st.session_state and os.path.exists(st.session_state.video_path):
+                        try:
+                            os.unlink(st.session_state.video_path)
+                        except:
+                            pass
+                    
+                    # セッション状態をクリア
+                    st.session_state.generated_video = None
+                    if 'video_path' in st.session_state:
+                        del st.session_state.video_path
+                    st.rerun()
         
-        with col1:
-            st.download_button(
-                label="🎬 動画をダウンロード (.mp4)",
-                data=st.session_state.generated_video,
-                file_name="vtuber_animation.mp4",
-                mime="video/mp4",
-                use_container_width=True
-            )
-        
-        with col2:
-            if st.button("🗑️ プレビューをクリア", use_container_width=True):
-                # 一時ファイルも削除
-                if 'video_path' in st.session_state and os.path.exists(st.session_state.video_path):
-                    try:
-                        os.unlink(st.session_state.video_path)
-                    except:
-                        pass
+        # バッチモードのダウンロード
+        if has_batch_videos:
+            st.subheader(f"📁 バッチ処理結果（{len(st.session_state.batch_videos)}個の動画）")
+            
+            # 全体統計
+            total_size = sum(len(video) for video in st.session_state.batch_videos) / (1024 * 1024)
+            st.info(f"📊 **合計サイズ**: {total_size:.1f}MB")
+            
+            # 個別ダウンロードボタン
+            for idx, (video_data, file_name) in enumerate(zip(st.session_state.batch_videos, st.session_state.batch_video_names)):
+                file_size = len(video_data) / (1024 * 1024)
                 
-                # セッション状態をクリア
-                st.session_state.generated_video = None
-                if 'video_path' in st.session_state:
-                    del st.session_state.video_path
-                st.rerun()
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.download_button(
+                        label=f"📹 {file_name} ({file_size:.1f}MB)",
+                        data=video_data,
+                        file_name=file_name,
+                        mime="video/mp4",
+                        key=f"download_{idx}",
+                        use_container_width=True
+                    )
+                with col2:
+                    if st.button("🗑️", key=f"delete_{idx}", help=f"{file_name}を削除"):
+                        # 該当する動画を削除
+                        st.session_state.batch_videos.pop(idx)
+                        st.session_state.batch_video_names.pop(idx)
+                        st.rerun()
+            
+            # 全件クリアボタン
+            st.divider()
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("📥 すべて一括ダウンロード準備", use_container_width=True):
+                    st.info("💡 個別の動画ダウンロードボタンをお使いください。Webブラウザの制限により、複数ファイルの一括ダウンロードはサポートされていません。")
+            
+            with col2:
+                if st.button("🗑️ すべてクリア", type="secondary", use_container_width=True):
+                    st.session_state.batch_videos = []
+                    st.session_state.batch_video_names = []
+                    st.rerun()
 
 if __name__ == "__main__":
     main() 
