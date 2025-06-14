@@ -391,6 +391,21 @@ def main():
     if 'generated_video' not in st.session_state:
         st.session_state.generated_video = None
     
+    # デフォルト画像の初期化
+    if 'default_mouth_closed' not in st.session_state:
+        try:
+            with open('博士 口閉じ.png', 'rb') as f:
+                st.session_state.default_mouth_closed = f.read()
+        except FileNotFoundError:
+            st.session_state.default_mouth_closed = None
+    
+    if 'default_mouth_open' not in st.session_state:
+        try:
+            with open('博士 口開け.png', 'rb') as f:
+                st.session_state.default_mouth_open = f.read()
+        except FileNotFoundError:
+            st.session_state.default_mouth_open = None
+    
     # ファイルアップロードセクション
     st.header("📁 ファイルアップロード")
     
@@ -477,27 +492,61 @@ def main():
     
     # 口閉じ画像のアップロード
     st.subheader("2. 口閉じ画像")
-    mouth_closed = st.file_uploader(
-        "口を閉じた状態の画像を選択してください",
-        type=['png', 'jpg', 'jpeg'],
-        help="PNG または JPG 形式の画像をアップロードしてください"
-    )
+    
+    # デフォルト画像使用オプション
+    use_default_closed = st.checkbox("デフォルト画像を使用 (@博士 口閉じ.png)", 
+                                   value=st.session_state.default_mouth_closed is not None,
+                                   disabled=st.session_state.default_mouth_closed is None)
+    
+    if use_default_closed and st.session_state.default_mouth_closed:
+        # デフォルト画像をuploadedfile形式で作成
+        mouth_closed = io.BytesIO(st.session_state.default_mouth_closed)
+        mouth_closed.name = "博士 口閉じ.png"
+        mouth_closed.seek(0)  # ファイルポインタを先頭に移動
+        st.success("✅ デフォルト画像「@博士 口閉じ.png」を使用しています")
+    else:
+        mouth_closed = st.file_uploader(
+            "口を閉じた状態の画像を選択してください",
+            type=['png', 'jpg', 'jpeg'],
+            help="PNG または JPG 形式の画像をアップロードしてください"
+        )
     
     # 口開き画像のアップロード
     st.subheader("3. 口開き画像")
-    mouth_open = st.file_uploader(
-        "口を開いた状態の画像を選択してください",
-        type=['png', 'jpg', 'jpeg'],
-        help="PNG または JPG 形式の画像をアップロードしてください"
-    )
+    
+    # デフォルト画像使用オプション
+    use_default_open = st.checkbox("デフォルト画像を使用 (@博士 口開け.png)", 
+                                 value=st.session_state.default_mouth_open is not None,
+                                 disabled=st.session_state.default_mouth_open is None)
+    
+    if use_default_open and st.session_state.default_mouth_open:
+        # デフォルト画像をuploadedfile形式で作成
+        mouth_open = io.BytesIO(st.session_state.default_mouth_open)
+        mouth_open.name = "博士 口開け.png"
+        mouth_open.seek(0)  # ファイルポインタを先頭に移動
+        st.success("✅ デフォルト画像「@博士 口開け.png」を使用しています")
+    else:
+        mouth_open = st.file_uploader(
+            "口を開いた状態の画像を選択してください",
+            type=['png', 'jpg', 'jpeg'],
+            help="PNG または JPG 形式の画像をアップロードしてください"
+        )
     
     # アップロードされた画像のプレビュー
     if mouth_closed and mouth_open:
         col1, col2 = st.columns(2)
         with col1:
-            st.image(mouth_closed, caption="口閉じ画像", width=200)
+            if use_default_closed and st.session_state.default_mouth_closed:
+                # デフォルト画像の場合はバイナリデータをio.BytesIOに変換してから表示
+                st.image(io.BytesIO(st.session_state.default_mouth_closed), caption="口閉じ画像 (デフォルト)", width=200)
+            else:
+                st.image(mouth_closed, caption="口閉じ画像", width=200)
         with col2:
-            st.image(mouth_open, caption="口開き画像", width=200)
+            if use_default_open and st.session_state.default_mouth_open:
+                # デフォルト画像の場合はバイナリデータをio.BytesIOに変換してから表示
+                st.image(io.BytesIO(st.session_state.default_mouth_open), caption="口開き画像 (デフォルト)", width=200)
+            else:
+                st.image(mouth_open, caption="口開き画像", width=200)
     
     # 動画生成ボタン
     st.header("🎬 動画生成")
@@ -506,7 +555,8 @@ def main():
     debug_mode = st.checkbox("🔍 デバッグモード（詳細な情報を表示）", value=False)
     
     # ボタンのラベルを処理モードに応じて変更
-    button_label = "動画を生成する" if processing_mode == "シングルモード（1つずつ処理）" else f"バッチ処理を開始する（{len(audio_files)}個のファイル）"
+    audio_count = len(audio_files) if audio_files else 0
+    button_label = "動画を生成する" if processing_mode == "シングルモード（1つずつ処理）" else f"バッチ処理を開始する（{audio_count}個のファイル）"
     button_disabled = not (audio_files and len([f for f in audio_files if f is not None]) > 0 and mouth_closed and mouth_open)
     
     if st.button(button_label, type="primary", disabled=button_disabled):
@@ -697,13 +747,16 @@ def main():
             col1, col2 = st.columns([1, 1])
             
             with col1:
-                st.download_button(
-                    label="🎬 動画をダウンロード (.mp4)",
-                    data=st.session_state.generated_video,
-                    file_name="vtuber_animation.mp4",
-                    mime="video/mp4",
-                    use_container_width=True
-                )
+                if st.session_state.generated_video is not None:
+                    st.download_button(
+                        label="🎬 動画をダウンロード (.mp4)",
+                        data=st.session_state.generated_video,
+                        file_name="vtuber_animation.mp4",
+                        mime="video/mp4",
+                        use_container_width=True
+                    )
+                else:
+                    st.error("動画データが見つかりません")
             
             with col2:
                 if st.button("🗑️ プレビューをクリア", use_container_width=True):
